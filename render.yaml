@@ -3,7 +3,18 @@ services:
     name: api-balance
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -c [gunicorn_config.py] app:app
+    startCommand: gunicorn -c gunicorn_config.py app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: FLASK_ENV
+        value: production
+    plan: free
+  - type: web
+    name: api-balance
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -c gunicorn_config.py app:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
