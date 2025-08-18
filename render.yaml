@@ -3,7 +3,7 @@ services:
     name: api-balance
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -c gunicorn_config.py app:app
+    startCommand: gunicorn wsgi:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
@@ -13,4 +13,6 @@ services:
         sync: false
       - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
         sync: false
+      - key: PORT
+        value: 10000
     plan: free
