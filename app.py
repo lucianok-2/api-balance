@@ -12,16 +12,16 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Configurar CORS para producción VPS
-cors_origins = os.getenv('CORS_ORIGINS', 'https://treetracker.site,https://www.treetracker.site').split(',')
-CORS(app, resources={
-    r"/*": {
-        "origins": cors_origins,
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
+# Configurar CORS simple
+CORS(app)
 
+@app.route('/')
+def home():
+    return jsonify({
+        "message": "TreeTracker API funcionando correctamente",
+        "status": "running",
+        "version": "1.0.0"
+    })
 
 @app.route('/health', methods=['GET'])
 def health_check():
