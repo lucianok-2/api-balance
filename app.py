@@ -82,6 +82,10 @@ def execute_user_function(function_id, file, user_id):
                 '5': f"functions/{user_id}/process_ventas_arauco.py",
                 # Función por defecto para IDs no especificados
                 'default': f"functions/{user_id}/process_recepciones.py"
+            },
+            'ae6a5783-4da9-49d2-b415-af7384362b7c': {
+                '6': f"functions/{user_id}/process_recepciones.py",
+                'default': f"functions/{user_id}/process_recepciones.py"
             }
         }
 
