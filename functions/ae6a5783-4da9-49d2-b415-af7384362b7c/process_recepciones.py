@@ -69,13 +69,13 @@ def process_excel_file(file_path, user_id):
             df.columns = df.columns.astype(str).str.strip()
             
             # Mapeo de columnas desde el Excel a las variables internas
-            fecha_col = "fecha"
-            proveedor_col = "proveedor"
+            fecha_col = "Fecha"
+            proveedor_col = "Proveedor"
             guia_col = "Guía"
             vol_col = "M3"
             cert_col = "Categoría Proveedor"
-            rol_col = "rol predio"
-            comuna_col = "comuna"
+            rol_col = "ROL"
+            comuna_col = "Comuna"
             tipo_mat_col = "Tipo de material"
             
             # Buscar columnas ignorando case si es necesario, pero intentamos exacto primero
