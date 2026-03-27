@@ -85,6 +85,10 @@ def execute_user_function(function_id, file, user_id):
             },
             'ae6a5783-4da9-49d2-b415-af7384362b7c': {
                 '6': f"functions/{user_id}/process_recepciones.py",
+                '7': f"functions/{user_id}/process_consumos.py",
+                '8': f"functions/{user_id}/process_ventas.py",
+                '9': f"functions/{user_id}/process_produccion.py",
+                '10': f"functions/{user_id}/process_ventas.py",
                 'default': f"functions/{user_id}/process_recepciones.py"
             }
         }
