@@ -37,56 +37,71 @@ def process_excel_file(file_path, user_id):
             
             df.columns = df.columns.astype(str).str.strip()
             
-            # Mapeo de columnas para VENTAS
-            fecha_col = "Fecha Venta"
-            producto_col = "Producto Vendido"
-            cliente_col = "Cliente"
-            vol_col = "Volumen M3"
-            cert_col = "Certificacion"
-            factura_col = "Numero Factura"
-            precio_col = "Precio Unitario"
+            # Mapeo de columnas para VENTAS soportando múltiples formatos
+            opciones_fecha = ["Fecha Venta", "Fecha"]
+            opciones_producto = ["Producto Vendido", "Producto"]
+            opciones_cliente = ["Cliente"]
+            opciones_vol = ["Volumen M3", "Total m3"]
+            opciones_cert = ["Certificacion"]
+            opciones_factura = ["Numero Factura", "N° Guía", "N° Guia"]
+            opciones_precio = ["Precio Unitario"]
             
-            columnas_esperadas = [fecha_col, producto_col, cliente_col, vol_col, cert_col] # Factura y Precio son opcionales
+            def encontrar_columna(opciones, df_cols):
+                for opc in opciones:
+                    for real_col in df_cols:
+                        if real_col.strip().lower() == opc.lower():
+                            return real_col
+                return None
             
-            columnas_map = {}
-            for expected in columnas_esperadas:
-                found = False
-                for actual in df.columns:
-                    if actual.strip().lower() == expected.lower():
-                        columnas_map[expected] = actual
-                        found = True
-                        break
-                if not found:
-                    error_msg = f"No encontré la columna requerida '{expected}' en la hoja «{sheet_name}»"
-                    errors.append(error_msg)
-                    print(f"❌ {error_msg}")
+            fecha_col = encontrar_columna(opciones_fecha, df.columns)
+            producto_col = encontrar_columna(opciones_producto, df.columns)
+            cliente_col = encontrar_columna(opciones_cliente, df.columns)
+            vol_col = encontrar_columna(opciones_vol, df.columns)
+            cert_col = encontrar_columna(opciones_cert, df.columns)
+            factura_col = encontrar_columna(opciones_factura, df.columns)
+            precio_col = encontrar_columna(opciones_precio, df.columns)
             
-            # Buscar opcionales
-            for actual in df.columns:
-                if actual.strip().lower() == factura_col.lower():
-                    columnas_map[factura_col] = actual
-                if actual.strip().lower() == precio_col.lower():
-                    columnas_map[precio_col] = actual
-
-            if len([k for k in columnas_esperadas if k in columnas_map]) < len(columnas_esperadas):
-                print(f"⚠️ Faltan columnas requeridas en hoja {sheet_name}, se omitirá.")
+            # Requeridas: Fecha, Producto, Cliente, Vol
+            requeridas = {
+                "Fecha": fecha_col,
+                "Producto": producto_col,
+                "Cliente": cliente_col,
+                "Volumen M3": vol_col
+            }
+            
+            faltan = []
+            for req_name, fnd_col in requeridas.items():
+                if not fnd_col:
+                    faltan.append(req_name)
+                    
+            if faltan:
+                error_msg = f"Faltan columnas requeridas en la hoja «{sheet_name}»: {', '.join(faltan)}"
+                errors.append(error_msg)
+                print(f"❌ {error_msg}")
                 continue
 
             sheet_records = 0
 
             for index, row in df.iterrows():
                 try:
-                    # Parsear Fecha
-                    val_fecha = row[columnas_map[fecha_col]]
+                    # Parsear Fecha robustamente
+                    val_fecha = row[fecha_col]
                     if pd.isna(val_fecha): continue
                     
-                    if isinstance(val_fecha, pd.Timestamp):
-                        fecha_iso = val_fecha.isoformat()
-                    else:
-                        fecha_iso = pd.to_datetime(val_fecha, errors='coerce').isoformat()
+                    try:
+                        if isinstance(val_fecha, pd.Timestamp):
+                            fecha_dt = val_fecha
+                        else:
+                            fecha_dt = pd.to_datetime(val_fecha, errors='coerce')
+                        
+                        if pd.isna(fecha_dt):
+                            continue
+                        fecha_iso = fecha_dt.isoformat()
+                    except:
+                        continue
 
                     # Parsear M3 (Volumen)
-                    val_vol = row[columnas_map[vol_col]]
+                    val_vol = row[vol_col]
                     try:
                         volumen = float(val_vol) if pd.notna(val_vol) else 0.0
                     except:
@@ -94,43 +109,55 @@ def process_excel_file(file_path, user_id):
                     
                     if volumen <= 0: continue
 
-                    # Parsear Producto
-                    val_tipo_mat = row[columnas_map[producto_col]]
+                    # Parsear Producto detectando Pallets para asignar W10.3
+                    val_tipo_mat = row[producto_col]
                     producto_codigo = ""
+                    es_pallet = False
+                    
                     if pd.notna(val_tipo_mat):
-                        match = re.match(r"^(\S+)", str(val_tipo_mat).strip())
-                        if match:
-                            producto_codigo = match.group(1)
+                        desc = str(val_tipo_mat).strip()
+                        if 'pallet' in desc.lower():
+                            producto_codigo = 'W10.3'
+                            es_pallet = True
+                        else:
+                            # Buscar el primer código (palabra) de la descripción
+                            match = re.match(r"^(\S+)", desc)
+                            if match:
+                                producto_codigo = match.group(1)
 
                     if not producto_codigo:
                         continue
                         
                     # Parsear Cliente
-                    val_cliente = row[columnas_map[cliente_col]]
+                    val_cliente = row[cliente_col]
                     cliente = str(val_cliente).strip() if pd.notna(val_cliente) else ""
                     
-                    # Parsear Certificacion
-                    val_cert = row[columnas_map[cert_col]]
-                    certificacion = str(val_cert).strip() if pd.notna(val_cert) else "Material Controlado"
+                    # Parsear Certificacion (vacio para pallets)
+                    certificacion = "Material Controlado"
+                    if es_pallet:
+                        certificacion = "" # Pallets sin certificación según requerimiento
+                    elif cert_col:
+                        val_cert = row[cert_col]
+                        certificacion = str(val_cert).strip() if pd.notna(val_cert) else "Material Controlado"
 
-                    # Parsear Factura (opcional)
+                    # Parsear Factura/Guia (opcional)
                     num_factura = ""
-                    if factura_col in columnas_map:
-                        val_fac = row[columnas_map[factura_col]]
+                    if factura_col:
+                        val_fac = row[factura_col]
                         if pd.notna(val_fac):
                             num_factura = str(val_fac).strip()
                             
                     # Parsear Precio (opcional)
                     precio_unitario = "NULL"
-                    if precio_col in columnas_map:
-                        val_precio = row[columnas_map[precio_col]]
+                    if precio_col:
+                        val_precio = row[precio_col]
                         if pd.notna(val_precio):
                             try:
                                 precio_unitario = float(val_precio)
                             except:
                                 pass
 
-                    # Generar INSERT statement
+                    # Generar INSERT statement (escapando comillas simples)
                     guardar_pc = producto_codigo.replace("'", "''")
                     guardar_cliente = cliente.replace("'", "''")
                     guardar_cert = certificacion.replace("'", "''")
