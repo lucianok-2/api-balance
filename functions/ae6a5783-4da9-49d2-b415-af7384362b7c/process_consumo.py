@@ -10,7 +10,7 @@ def process_file(file, user_id):
         return {"success": False, "error": "No se proporcionó ningún archivo"}
 
     # Crear una ruta manual única para evitar conflictos en Windows
-    temp_name = f"prod_upload_{user_id}_{int(time.time())}.xlsx"
+    temp_name = f"cons_upload_{user_id}_{int(time.time())}.xlsx"
     temp_path = os.path.join(tempfile.gettempdir(), temp_name)
     
     try:
@@ -46,19 +46,18 @@ def process_excel_file(file_path, user_id):
     try:
         xl = pd.ExcelFile(file_path)
         sheet_names = xl.sheet_names
-        print(f"📄 Hojas de producción encontradas: {sheet_names}")
+        print(f"📄 Hojas de consumo encontradas: {sheet_names}")
 
         for sheet_name in sheet_names:
-            print(f"📊 Analizando hoja de producción: {sheet_name}")
+            print(f"📊 Analizando hoja de consumo: {sheet_name}")
             
             # Leer las primeras 20 filas para buscar el header
             df_head = xl.parse(sheet_name, nrows=20, header=None)
             
-            # Mapeo de palabras clave para PRODUCCION
+            # Mapeo de palabras clave para CONSUMO
             mapeo_keywords = {
-                "fecha": ["fecha", "fec", "produccion", "producción", "dia", "día"],
-                "producto": ["producto", "prod", "item", "producir", "articulo", "artículo"],
-                "volumen": ["volumen", "m3", "m^3", "cantidad", "cant", "neto"],
+                "fecha": ["fecha", "fec", "dia", "día", "período", "periodo", "fecha consumo"],
+                "volumen": ["consumo madera (m3)", "consumo madera m3", "consumo", "volumen", "consumido"],
                 "descripcion": ["descripcion", "descripción", "detalle", "obs", "observacion"]
             }
 
@@ -70,17 +69,21 @@ def process_excel_file(file_path, user_id):
                 row_values = [str(val).strip().lower() for val in row.values]
                 
                 temp_map = {}
-                requeridas = ["fecha", "producto", "volumen"]
+                requeridas = ["fecha", "volumen"]
                 
                 for target in requeridas:
                     keywords = mapeo_keywords[target]
                     for idx, cell_val in enumerate(row_values):
                         if cell_val != "nan":
+                            # Si buscamos volumen, ignorar si la celda contiene "stock" o "inicial"
+                            if target == "volumen" and any(x in cell_val for x in ["stock", "inicial"]):
+                                continue
+                                
                             if any(k == cell_val or k in cell_val for k in keywords):
                                 temp_map[target] = idx
                                 break
                 
-                if len(temp_map) >= 2: # Al menos 2 de 3
+                if len(temp_map) >= 2: # Fecha y Volumen
                     header_row_idx = i
                     columnas_map = temp_map
                     # Buscar la opcional descripcion
@@ -104,9 +107,8 @@ def process_excel_file(file_path, user_id):
                 try:
                     idx_fecha = columnas_map.get("fecha")
                     idx_vol = columnas_map.get("volumen")
-                    idx_prod = columnas_map.get("producto")
 
-                    if idx_fecha is None or idx_vol is None or idx_prod is None:
+                    if idx_fecha is None or idx_vol is None:
                         continue
 
                     # Parsear Fecha
@@ -133,20 +135,8 @@ def process_excel_file(file_path, user_id):
                     
                     if volumen <= 0: continue
 
-                    # Parsear Producto (Detectar Pallet -> W10.3)
-                    val_prod = row[idx_prod] if idx_prod < len(row) else ""
-                    producto_destino = ""
-                    if pd.notna(val_prod):
-                        desc = str(val_prod).strip()
-                        if 'pallet' in desc.lower():
-                            producto_destino = 'W10.3'
-                        else:
-                            match = re.match(r"^(\S+)", desc)
-                            if match:
-                                producto_destino = match.group(1)
-
-                    if not producto_destino:
-                        continue
+                    # Para Vision, el consumo es de Materia Prima (W1.1)
+                    producto_codigo = "W1.1"
                         
                     # Parsear Descripción (opcional)
                     descripcion = ""
@@ -155,12 +145,10 @@ def process_excel_file(file_path, user_id):
                         val_desc = row[idx_desc] if idx_desc < len(row) else ""
                         descripcion = str(val_desc).strip() if pd.notna(val_desc) else ""
 
-                    # Generar SQL INSERT
-                    # Producción típica: Origen W1.1 -> Destino (Pallets u otro)
-                    guardar_pd = producto_destino.replace("'", "''")
+                    # Generar SQL INSERT para la tabla consumos
                     guardar_desc = descripcion.replace("'", "''")
 
-                    insert_sql = f"INSERT INTO produccion (fecha_produccion, producto_origen_codigo, producto_destino_codigo, volumen_origen_m3, volumen_destino_m3, descripcion, user_id) VALUES ('{fecha_iso}', 'W1.1', '{guardar_pd}', 0, {volumen}, '{guardar_desc}', '{user_id}');"
+                    insert_sql = f"INSERT INTO consumos (fecha_consumo, producto_codigo, volumen_m3, descripcion, user_id) VALUES ('{fecha_iso}', '{producto_codigo}', {volumen}, '{guardar_desc}', '{user_id}');"
                     
                     insert_statements.append(insert_sql)
                     sheet_records += 1
@@ -178,7 +166,7 @@ def process_excel_file(file_path, user_id):
             "sheets_processed": processed_sheets,
             "errors": errors,
             "insert_statements": insert_statements,
-            "message": f"¡Procesamiento Completado! {total_records} registros de producción extraídos."
+            "message": f"¡Procesamiento Completado! {total_records} consumos extraídos."
         }
 
     except Exception as e:

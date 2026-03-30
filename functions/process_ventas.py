@@ -1,237 +1,207 @@
-# process_ventas.py
 import os
 import pandas as pd
 from datetime import datetime
 import tempfile
+import re
+import time
 
 def process_file(file, user_id):
-    """
-    Función principal que será llamada por la API Flask para procesar ventas
-    
-    Args:
-        file: Archivo subido desde el frontend
-        user_id: ID del usuario autenticado
-    
-    Returns:
-        dict: Resultado del procesamiento con INSERT statements
-    """
-    
     if not file:
-        return {
-            "success": False,
-            "error": "No se proporcionó ningún archivo"
-        }
+        return {"success": False, "error": "No se proporcionó ningún archivo"}
+
+    # Crear una ruta manual única para evitar conflictos en Windows
+    temp_name = f"upload_gen_sales_{user_id}_{int(time.time())}.xlsx"
+    temp_path = os.path.join(tempfile.gettempdir(), temp_name)
     
     try:
-        # Guardar archivo temporalmente
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
-            file.save(temp_file.name)
-            temp_path = temp_file.name
+        # Guardar directamente con Flask
+        file.save(temp_path)
         
-        try:
-            # Ejecutar el procesamiento principal CON EL USER_ID
-            result = process_excel_file(temp_path, user_id)
-            return result
-            
-        finally:
-            # Limpiar archivo temporal
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        # Pequeño retardo para asegurar que Windows libere el handle de escritura
+        time.sleep(0.5)
         
+        result = process_excel_file(temp_path, user_id)
+        return result
+
     except Exception as e:
-        return {
-            "success": False,
-            "error": f"Error general: {str(e)}",
-            "records_processed": 0
-        }
+        return {"success": False, "error": f"Error general: {str(e)}", "records_processed": 0}
+    finally:
+        # Limpiar
+        intentos = 0
+        while intentos < 3:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                break
+            except Exception:
+                time.sleep(0.5)
+                intentos += 1
 
 def process_excel_file(file_path, user_id):
-    """
-    Procesa el archivo Excel de ventas y genera INSERT statements
-    
-    Args:
-        file_path: Ruta del archivo Excel a procesar
-        user_id: ID del usuario autenticado
-    """
-    
-    # ————————————————
-    # 1) CONFIGURACIÓN
-    # ————————————————
-    
-    # Código de producto fijo para todas las ventas
-    PRODUCTO_CODIGO = "W1.1"
-    
-    # Certificación por defecto
-    CERTIFICACION_DEFAULT = "Material Controlado"
-    
     total_records = 0
     processed_sheets = 0
     errors = []
     insert_statements = []
-    
+
     try:
-        # ————————————————
-        # 2) CARGAR TODO EL EXCEL
-        # ————————————————
-        xf = pd.read_excel(file_path, sheet_name=None)
-        
-        # ————————————————
-        # 3) PROCESAR CADA HOJA
-        # ————————————————
-        for sheet_name, df in xf.items():
-            print(f"📊 Procesando hoja: {sheet_name} con {len(df)} filas")
+        xl = pd.ExcelFile(file_path)
+        sheet_names = xl.sheet_names
+        print(f"📄 Hojas encontradas (Gen): {sheet_names}")
+
+        for sheet_name in sheet_names:
+            print(f"📊 Analizando hoja: {sheet_name}")
             
-            # Limpieza de nombres de columna (quita espacios al inicio/fin)
-            df.columns = df.columns.str.strip()
+            df_head = xl.parse(sheet_name, nrows=20, header=None)
             
-            print(f"📋 Columnas encontradas: {list(df.columns)}")
+            mapeo_keywords = {
+                "fecha": ["fecha", "fec", "date", "dia", "día"],
+                "producto": ["producto", "prod", "item", "descripcion", "descripción", "artículo", "articulo"],
+                "cliente": ["cliente", "destinatario", "receptor", "comprador", "proveedor"],
+                "volumen": ["volumen", "m3", "m^3", "cantidad", "cant", "neto"],
+                "cert": ["certificacion", "certificación", "cert", "scs", "material"],
+                "factura": ["factura", "guia", "guía", "n°", "numero", "número", "doc", "comprobante", "remisión"],
+                "precio": ["precio", "unitario", "valor", "monto", "costo"]
+            }
+
+            header_row_idx = -1
+            columnas_map = {} 
             
-            # Mapear las columnas requeridas (buscar variaciones)
-            column_mapping = {}
-            
-            # Buscar NUM_GUIA
-            for col in df.columns:
-                if 'NUM_GUIA' in col.upper() or 'NUMERO_GUIA' in col.upper() or 'GUIA' in col.upper():
-                    column_mapping['num_guia'] = col
+            for i, row in df_head.iterrows():
+                row_values = [str(val).strip().lower() for val in row.values]
+                temp_map = {}
+                requeridas = ["fecha", "producto", "cliente", "volumen"]
+                
+                for target in requeridas:
+                    keywords = mapeo_keywords[target]
+                    for idx, cell_val in enumerate(row_values):
+                        if cell_val != "nan":
+                            if any(k == cell_val or k in cell_val for k in keywords):
+                                temp_map[target] = idx
+                                break
+                
+                if len(temp_map) >= 3:
+                    header_row_idx = i
+                    columnas_map = temp_map
+                    for target in ["cert", "factura", "precio"]:
+                        keywords = mapeo_keywords[target]
+                        for idx, cell_val in enumerate(row_values):
+                            if cell_val != "nan" and idx not in columnas_map.values():
+                                if any(k == cell_val or k in cell_val for k in keywords):
+                                    columnas_map[target] = idx
+                                    break
                     break
             
-            # Buscar NOMBRE_PROVEEDOR
-            for col in df.columns:
-                if 'NOMBRE_PROVEEDOR' in col.upper() or 'PROVEEDOR' in col.upper():
-                    column_mapping['proveedor'] = col
-                    break
-            
-            # Buscar FECHA_RECEPCION
-            for col in df.columns:
-                if 'FECHA' in col.upper() and 'RECEP' in col.upper():
-                    column_mapping['fecha_recepcion'] = col
-                    break
-                elif 'FECHA' in col.upper():
-                    column_mapping['fecha_recepcion'] = col
-                    break
-            
-            # Buscar VOLUMEN_M3
-            for col in df.columns:
-                if 'VOLUMEN' in col.upper() and 'M3' in col.upper():
-                    column_mapping['volumen_m3'] = col
-                    break
-                elif 'M3' in col.upper() or 'VOLUMEN' in col.upper():
-                    column_mapping['volumen_m3'] = col
-                    break
-            
-            print(f"📋 Mapeo de columnas: {column_mapping}")
-            
-            # Verificar que se encontraron las columnas requeridas
-            required_fields = ['num_guia', 'proveedor', 'fecha_recepcion', 'volumen_m3']
-            missing_fields = [field for field in required_fields if field not in column_mapping]
-            
-            if missing_fields:
-                error_msg = f"No se encontraron las columnas requeridas en la hoja «{sheet_name}»: {missing_fields}"
-                errors.append(error_msg)
-                print(f"❌ {error_msg}")
+            if header_row_idx == -1:
+                print(f"⚠️ Estructura no detectada en {sheet_name}")
                 continue
 
+            df = xl.parse(sheet_name, skiprows=header_row_idx + 1, header=None)
             sheet_records = 0
-
-            # Itera sobre cada fila de la hoja
             for index, row in df.iterrows():
                 try:
-                    # Obtener número de guía (requerido)
-                    if pd.notna(row[column_mapping['num_guia']]):
-                        num_guia = str(row[column_mapping['num_guia']]).strip()
-                    else:
-                        print(f"⚠️ Saltando fila {index}: número de guía vacío")
-                        continue
-                    
-                    # Obtener proveedor (requerido)
-                    if pd.notna(row[column_mapping['proveedor']]):
-                        proveedor = str(row[column_mapping['proveedor']]).strip()
-                    else:
-                        print(f"⚠️ Saltando fila {index}: proveedor vacío")
-                        continue
-                    
-                    # Obtener volumen (requerido y debe ser > 0)
-                    try:
-                        if pd.notna(row[column_mapping['volumen_m3']]):
-                            volumen = float(row[column_mapping['volumen_m3']])
-                            if volumen <= 0:
-                                print(f"⚠️ Saltando fila {index}: volumen es 0 o negativo ({volumen})")
-                                continue
-                        else:
-                            print(f"⚠️ Saltando fila {index}: volumen vacío")
-                            continue
-                    except (ValueError, TypeError):
-                        print(f"⚠️ Saltando fila {index}: error al convertir volumen")
+                    idx_fecha = columnas_map.get("fecha")
+                    idx_vol = columnas_map.get("volumen")
+                    idx_prod = columnas_map.get("producto")
+                    idx_cli = columnas_map.get("cliente")
+
+                    if idx_fecha is None or idx_vol is None or idx_prod is None or idx_cli is None:
                         continue
 
-                    # Validar que no sean valores vacíos o NaN
-                    if num_guia in ["nan", "None", ""] or proveedor in ["nan", "None", ""]:
-                        print(f"⚠️ Saltando fila {index}: datos vacíos")
-                        continue
+                    val_fecha = row[idx_fecha] if idx_fecha < len(row) else None
+                    if pd.isna(val_fecha): continue
                     
-                    # Obtener fecha de recepción
                     try:
-                        if pd.notna(row[column_mapping['fecha_recepcion']]):
-                            fecha = pd.to_datetime(row[column_mapping['fecha_recepcion']])
-                            print(f"📅 Fila {index}: Fecha procesada: {fecha}")
-                        else:
-                            # Si no hay fecha, usar fecha actual
-                            fecha = datetime.now()
-                            print(f"📅 Fila {index}: Usando fecha actual: {fecha}")
+                        fecha_dt = pd.to_datetime(val_fecha, errors='coerce')
+                        if pd.isna(fecha_dt): continue
+                        fecha_iso = fecha_dt.isoformat()
                     except:
-                        # Si hay error al convertir la fecha, usar fecha actual
-                        fecha = datetime.now()
-                        print(f"📅 Fila {index}: Error en fecha, usando fecha actual: {fecha}")
+                        continue
 
-                    # Generar INSERT statement PARA VENTAS CON EL USER_ID
-                    insert_sql = f"""INSERT INTO ventas (fecha_venta, producto_codigo, cliente, num_factura, volumen_m3, certificacion, user_id) 
-VALUES ('{fecha.isoformat()}', '{PRODUCTO_CODIGO}', '{proveedor.replace("'", "''")}', '{num_guia}', {volumen}, '{CERTIFICACION_DEFAULT}', '{user_id}');"""
+                    val_vol = row[idx_vol] if idx_vol < len(row) else 0.0
+                    try:
+                        volumen = float(val_vol) if pd.notna(val_vol) else 0.0
+                    except:
+                        volumen = 0.0
+                    
+                    if volumen <= 0: continue
 
+                    # Detección de producto
+                    val_prod = row[idx_prod] if idx_prod < len(row) else ""
+                    producto_codigo = "W1.1" # Default genérico
+                    
+                    if pd.notna(val_prod):
+                        desc = str(val_prod).strip()
+                        if 'pallet' in desc.lower():
+                            producto_codigo = 'W10.3'
+                        elif 'w5.2' in desc.lower() or 'madera' in desc.lower():
+                            producto_codigo = 'W5.2'
+                        elif 'w3.1' in desc.lower() or 'astilla' in desc.lower():
+                            producto_codigo = 'W3.1'
+                        elif 'w3.2' in desc.lower() or 'aserrin' in desc.lower() or 'aserrín' in desc.lower():
+                            producto_codigo = 'W3.2'
+                        else:
+                            # Intentar capturar primer palabra si parece un código
+                            match = re.match(r"^(W\d+\.\d+)", desc, re.I)
+                            if match:
+                                producto_codigo = match.group(1).upper()
+
+                    # Cliente
+                    val_cliente = row[idx_cli] if idx_cli < len(row) else ""
+                    cliente = str(val_cliente).strip() if pd.notna(val_cliente) else "Venta Genérica"
+                    
+                    # Certificación
+                    certificacion = "Material Controlado"
+                    if "cert" in columnas_map:
+                        idx_cert = columnas_map["cert"]
+                        val_cert = row[idx_cert] if idx_cert < len(row) else None
+                        if pd.notna(val_cert):
+                            certificacion = str(val_cert).strip()
+
+                    # Factura
+                    num_factura = ""
+                    if "factura" in columnas_map:
+                        idx_fac = columnas_map["factura"]
+                        val_fac = row[idx_fac] if idx_fac < len(row) else None
+                        if pd.notna(val_fac):
+                            num_factura = str(val_fac).strip()
+                            
+                    # Precio
+                    precio_unitario = "NULL"
+                    if "precio" in columnas_map:
+                        idx_pre = columnas_map["precio"]
+                        val_precio = row[idx_pre] if idx_pre < len(row) else None
+                        if pd.notna(val_precio):
+                            try:
+                                precio_unitario = float(val_precio)
+                            except:
+                                pass
+
+                    # SQL
+                    g_pc = producto_codigo.replace("'", "''")
+                    g_cli = cliente.replace("'", "''")
+                    g_cert = certificacion.replace("'", "''")
+                    g_fac = num_factura.replace("'", "''")
+
+                    insert_sql = f"INSERT INTO ventas (fecha_venta, producto_codigo, cliente, num_factura, volumen_m3, certificacion, precio_unitario, user_id) VALUES ('{fecha_iso}', '{g_pc}', '{g_cli}', '{g_fac}', {volumen}, '{g_cert}', {precio_unitario}, '{user_id}');"
+                    
                     insert_statements.append(insert_sql)
-
-                    # Log del registro procesado
-                    record = {
-                        "fecha_recepcion": fecha.isoformat(),
-                        "producto_codigo": PRODUCTO_CODIGO,
-                        "proveedor": proveedor,
-                        "num_guia": num_guia,
-                        "volumen_m3": volumen,
-                        "certificacion": CERTIFICACION_DEFAULT,
-                        "user_id": user_id
-                    }
-
-                    print(f"✅ Procesado: {record}")
                     sheet_records += 1
                     total_records += 1
-                        
-                except Exception as row_error:
-                    print(f"❌ Error procesando fila {index}: {row_error}")
+                    
+                except Exception:
                     continue
-            
+
             processed_sheets += 1
-            print(f"✅ Hoja {sheet_name} procesada: {sheet_records} registros")
-        
-        print("¡Procesamiento de ventas completado!")
-        
+            print(f"✅ Hoja {sheet_name} Gen finalizada: {sheet_records} registros")
+
         return {
             "success": True,
             "records_processed": total_records,
             "sheets_processed": processed_sheets,
-            "total_sheets": len(xf),
             "errors": errors,
             "insert_statements": insert_statements,
-            "message": f"¡Procesamiento de ventas completado! {total_records} registros procesados de {processed_sheets} hojas."
+            "message": f"¡Procesamiento Completado (Gen)! {total_records} registros extraídos."
         }
-        
+
     except Exception as e:
-        error_msg = f"Error en el procesamiento de ventas: {str(e)}"
-        print(f"❌ {error_msg}")
-        errors.append(error_msg)
-        
-        return {
-            "success": False,
-            "error": error_msg,
-            "records_processed": total_records,
-            "errors": errors,
-            "insert_statements": insert_statements
-        }
+        return {"success": False, "error": str(e), "records_processed": total_records}

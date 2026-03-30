@@ -88,7 +88,7 @@ def execute_user_function(function_id, file, user_id):
                 '7': f"functions/{user_id}/process_consumos.py",
                 '8': f"functions/{user_id}/process_ventas.py",
                 '9': f"functions/{user_id}/process_produccion.py",
-                '10': f"functions/{user_id}/process_ventas.py",
+                '10': f"functions/{user_id}/process_consumo.py",
                 'default': f"functions/{user_id}/process_recepciones.py"
             }
         }
